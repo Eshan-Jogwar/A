@@ -1,0 +1,436 @@
+﻿#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+
+
+#define MAX_KEYS 3  // Maximum keys in a node (order-1)
+#define MIN_KEYS MAX_KEYS/2
+
+
+// B-Tree Node Structure
+typedef struct BTreeNode {
+    int keys[MAX_KEYS + 1];  // Extra space for temporary overflow
+    int key_count;
+    struct BTreeNode *children[MAX_KEYS + 2];
+    bool is_leaf;
+} BTreeNode;
+
+
+// Create a new B-Tree node
+BTreeNode* createNode(bool is_leaf) {
+    BTreeNode* newNode = (BTreeNode*)malloc(sizeof(BTreeNode));
+    newNode->key_count = 0;
+    newNode->is_leaf = is_leaf;
+    
+    for (int i = 0; i < MAX_KEYS + 2; i++) {
+        newNode->children[i] = NULL;
+    }
+    
+    return newNode;
+}
+
+
+// Search key in B-Tree
+BTreeNode* search(BTreeNode* root, int key, int* pos) {
+    if (root == NULL) return NULL;
+    
+    int i = 0;
+    while (i < root->key_count && key > root->keys[i]) {
+        i++;
+    }
+    
+    if (i < root->key_count && key == root->keys[i]) {
+        *pos = i;
+        return root;
+    }
+    
+    if (root->is_leaf) {
+        return NULL;
+    }
+    
+    return search(root->children[i], key, pos);
+}
+
+
+// Split child function
+void splitChild(BTreeNode* parent, int index, BTreeNode* child) {
+    BTreeNode* newChild = createNode(child->is_leaf);
+    newChild->key_count = MIN_KEYS;
+    
+    // Copy the last MIN_KEYS keys from child to newChild
+    for (int i = 0; i < MIN_KEYS; i++) {
+        newChild->keys[i] = child->keys[i + MIN_KEYS + 1];
+    }
+    
+    // Copy the last MIN_KEYS+1 children if not leaf
+    if (!child->is_leaf) {
+        for (int i = 0; i <= MIN_KEYS; i++) {
+            newChild->children[i] = child->children[i + MIN_KEYS + 1];
+        }
+    }
+    
+    child->key_count = MIN_KEYS;
+    
+    // Make space in parent for new child
+    for (int i = parent->key_count; i > index; i--) {
+        parent->children[i + 1] = parent->children[i];
+        parent->keys[i] = parent->keys[i - 1];
+    }
+    
+    // Link new child to parent
+    parent->children[index + 1] = newChild;
+    parent->keys[index] = child->keys[MIN_KEYS];
+    parent->key_count++;
+}
+
+
+// Insert key into non-full node
+void insertNonFull(BTreeNode* node, int key) {
+    int i = node->key_count - 1;
+    
+    if (node->is_leaf) {
+        // Insert into leaf node
+        while (i >= 0 && key < node->keys[i]) {
+            node->keys[i + 1] = node->keys[i];
+            i--;
+        }
+        node->keys[i + 1] = key;
+        node->key_count++;
+    } else {
+        // Find child to insert into
+        while (i >= 0 && key < node->keys[i]) {
+            i--;
+        }
+        i++;
+        
+        // Check if child is full
+        if (node->children[i]->key_count == MAX_KEYS) {
+            splitChild(node, i, node->children[i]);
+            
+            // Determine which child to go to after split
+            if (key > node->keys[i]) {
+                i++;
+            }
+        }
+        insertNonFull(node->children[i], key);
+    }
+}
+
+
+// Insert key into B-Tree
+BTreeNode* insert(BTreeNode* root, int key) {
+    if (root == NULL) {
+        root = createNode(true);
+        root->keys[0] = key;
+        root->key_count = 1;
+        return root;
+    }
+    
+    // If root is full, split it
+    if (root->key_count == MAX_KEYS) {
+        BTreeNode* newRoot = createNode(false);
+        newRoot->children[0] = root;
+        splitChild(newRoot, 0, root);
+        
+        // Insert key into appropriate child
+        int i = 0;
+        if (newRoot->keys[0] < key) {
+            i++;
+        }
+        insertNonFull(newRoot->children[i], key);
+        return newRoot;
+    } else {
+        insertNonFull(root, key);
+        return root;
+    }
+}
+
+
+// Find predecessor
+int findPredecessor(BTreeNode* node, int index) {
+    BTreeNode* current = node->children[index];
+    while (!current->is_leaf) {
+        current = current->children[current->key_count];
+    }
+    return current->keys[current->key_count - 1];
+}
+
+
+// Find successor
+int findSuccessor(BTreeNode* node, int index) {
+    BTreeNode* current = node->children[index + 1];
+    while (!current->is_leaf) {
+        current = current->children[0];
+    }
+    return current->keys[0];
+}
+
+
+// Merge nodes
+void merge(BTreeNode* node, int index) {
+    BTreeNode* child = node->children[index];
+    BTreeNode* sibling = node->children[index + 1];
+    
+    // Move key from parent to child
+    child->keys[MIN_KEYS] = node->keys[index];
+    
+    // Copy keys from sibling to child
+    for (int i = 0; i < sibling->key_count; i++) {
+        child->keys[i + MIN_KEYS + 1] = sibling->keys[i];
+    }
+    
+    // Copy children from sibling to child if not leaf
+    if (!child->is_leaf) {
+        for (int i = 0; i <= sibling->key_count; i++) {
+            child->children[i + MIN_KEYS + 1] = sibling->children[i];
+        }
+    }
+    
+    // Move keys in parent
+    for (int i = index + 1; i < node->key_count; i++) {
+        node->keys[i - 1] = node->keys[i];
+    }
+    
+    // Move children in parent
+    for (int i = index + 2; i <= node->key_count; i++) {
+        node->children[i - 1] = node->children[i];
+    }
+    
+    child->key_count += sibling->key_count + 1;
+    node->key_count--;
+    
+    free(sibling);
+}
+
+
+// Borrow from previous sibling
+void borrowFromPrev(BTreeNode* node, int index) {
+    BTreeNode* child = node->children[index];
+    BTreeNode* sibling = node->children[index - 1];
+    
+    // Make space in child
+    for (int i = child->key_count - 1; i >= 0; i--) {
+        child->keys[i + 1] = child->keys[i];
+    }
+    
+    // Move child pointers if not leaf
+    if (!child->is_leaf) {
+        for (int i = child->key_count; i >= 0; i--) {
+            child->children[i + 1] = child->children[i];
+        }
+    }
+    
+    // Move key from parent to child
+    child->keys[0] = node->keys[index - 1];
+    
+    // Move key from sibling to parent
+    if (!child->is_leaf) {
+        child->children[0] = sibling->children[sibling->key_count];
+    }
+    
+    node->keys[index - 1] = sibling->keys[sibling->key_count - 1];
+    
+    child->key_count++;
+    sibling->key_count--;
+}
+
+
+// Borrow from next sibling
+void borrowFromNext(BTreeNode* node, int index) {
+    BTreeNode* child = node->children[index];
+    BTreeNode* sibling = node->children[index + 1];
+    
+    // Move key from parent to child
+    child->keys[child->key_count] = node->keys[index];
+    
+    // Move key from sibling to parent
+    if (!child->is_leaf) {
+        child->children[child->key_count + 1] = sibling->children[0];
+    }
+    
+    node->keys[index] = sibling->keys[0];
+    
+    // Shift keys in sibling
+    for (int i = 1; i < sibling->key_count; i++) {
+        sibling->keys[i - 1] = sibling->keys[i];
+    }
+    
+    // Shift children in sibling if not leaf
+    if (!sibling->is_leaf) {
+        for (int i = 1; i <= sibling->key_count; i++) {
+            sibling->children[i - 1] = sibling->children[i];
+        }
+    }
+    
+    child->key_count++;
+    sibling->key_count--;
+}
+
+
+// Delete from non-leaf node
+void deleteFromNonLeaf(BTreeNode* node, int index) {
+    int key = node->keys[index];
+    
+    if (node->children[index]->key_count >= MIN_KEYS + 1) {
+        // Borrow from predecessor
+        int pred = findPredecessor(node, index);
+        node->keys[index] = pred;
+        deleteKey(node->children[index], pred);
+    } else if (node->children[index + 1]->key_count >= MIN_KEYS + 1) {
+        // Borrow from successor
+        int succ = findSuccessor(node, index);
+        node->keys[index] = succ;
+        deleteKey(node->children[index + 1], succ);
+    } else {
+        // Merge
+        merge(node, index);
+        deleteKey(node->children[index], key);
+    }
+}
+
+
+// Delete key from node
+void deleteKey(BTreeNode* node, int key) {
+    int index = 0;
+    while (index < node->key_count && node->keys[index] < key) {
+        index++;
+    }
+    
+    if (index < node->key_count && node->keys[index] == key) {
+        // Key found in this node
+        if (node->is_leaf) {
+            // Remove from leaf
+            for (int i = index + 1; i < node->key_count; i++) {
+                node->keys[i - 1] = node->keys[i];
+            }
+            node->key_count--;
+        } else {
+            deleteFromNonLeaf(node, index);
+        }
+    } else {
+        // Key not in this node
+        if (node->is_leaf) {
+            printf("Key %d not found in tree.\n", key);
+            return;
+        }
+        
+        bool lastChild = (index == node->key_count);
+        
+        if (node->children[index]->key_count < MIN_KEYS + 1) {
+            // Need to fill child
+            if (index != 0 && node->children[index - 1]->key_count >= MIN_KEYS + 1) {
+                borrowFromPrev(node, index);
+            } else if (index != node->key_count && node->children[index + 1]->key_count >= MIN_KEYS + 1) {
+                borrowFromNext(node, index);
+            } else {
+                if (index != node->key_count) {
+                    merge(node, index);
+                } else {
+                    merge(node, index - 1);
+                }
+            }
+        }
+        
+        if (lastChild && index > node->key_count) {
+            deleteKey(node->children[index - 1], key);
+        } else {
+            deleteKey(node->children[index], key);
+        }
+    }
+}
+
+
+// Delete from B-Tree
+BTreeNode* delete(BTreeNode* root, int key) {
+    if (root == NULL) {
+        printf("Tree is empty.\n");
+        return root;
+    }
+    
+    deleteKey(root, key);
+    
+    // If root becomes empty
+    if (root->key_count == 0) {
+        BTreeNode* temp = root;
+        if (root->is_leaf) {
+            root = NULL;
+        } else {
+            root = root->children[0];
+        }
+        free(temp);
+    }
+    
+    return root;
+}
+
+
+// Print B-Tree
+void printBTree(BTreeNode* root, int level) {
+    if (root != NULL) {
+        printf("Level %d: ", level);
+        for (int i = 0; i < root->key_count; i++) {
+            printf("%d ", root->keys[i]);
+        }
+        printf("\n");
+        
+        if (!root->is_leaf) {
+            for (int i = 0; i <= root->key_count; i++) {
+                printBTree(root->children[i], level + 1);
+            }
+        }
+    }
+}
+
+
+// Free B-Tree memory
+void freeBTree(BTreeNode* root) {
+    if (root != NULL) {
+        if (!root->is_leaf) {
+            for (int i = 0; i <= root->key_count; i++) {
+                freeBTree(root->children[i]);
+            }
+        }
+        free(root);
+    }
+}
+
+
+// B-Tree Demo
+void bTreeDemo() {
+    printf("=== B-Tree Implementation ===\n\n");
+    
+    BTreeNode* root = NULL;
+    int keys[] = {10, 20, 5, 6, 12, 30, 7, 17, 3, 25};
+    int n = sizeof(keys) / sizeof(keys[0]);
+    
+    printf("Inserting keys: ");
+    for (int i = 0; i < n; i++) {
+        printf("%d ", keys[i]);
+        root = insert(root, keys[i]);
+    }
+    printf("\n\n");
+    
+    printf("B-Tree structure:\n");
+    printBTree(root, 0);
+    printf("\n");
+    
+    // Search demonstration
+    int searchKey = 12;
+    int pos;
+    BTreeNode* result = search(root, searchKey, &pos);
+    if (result != NULL) {
+        printf("Key %d found at position %d\n", searchKey, pos);
+    } else {
+        printf("Key %d not found\n", searchKey);
+    }
+    
+    // Delete demonstration
+    printf("\nDeleting key 6:\n");
+    root = delete(root, 6);
+    printBTree(root, 0);
+    
+    printf("\nDeleting key 13 (not in tree):\n");
+    root = delete(root, 13);
+    
+    freeBTree(root);
+}

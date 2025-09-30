@@ -1,0 +1,283 @@
+﻿#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+
+
+#define MAX_KEYS 3
+#define MIN_KEYS MAX_KEYS/2
+
+
+// B+ Tree Node Structure
+typedef struct BPlusTreeNode {
+    int keys[MAX_KEYS + 1];
+    int key_count;
+    struct BPlusTreeNode *children[MAX_KEYS + 2];
+    struct BPlusTreeNode *next;  // For leaf nodes - next leaf
+    bool is_leaf;
+} BPlusTreeNode;
+
+
+// Create new B+ Tree node
+BPlusTreeNode* createBPlusNode(bool is_leaf) {
+    BPlusTreeNode* newNode = (BPlusTreeNode*)malloc(sizeof(BPlusTreeNode));
+    newNode->key_count = 0;
+    newNode->is_leaf = is_leaf;
+    newNode->next = NULL;
+    
+    for (int i = 0; i < MAX_KEYS + 2; i++) {
+        newNode->children[i] = NULL;
+    }
+    
+    return newNode;
+}
+
+
+// Search in B+ Tree
+BPlusTreeNode* searchBPlus(BPlusTreeNode* root, int key, int* pos) {
+    if (root == NULL) return NULL;
+    
+    int i = 0;
+    while (i < root->key_count && key >= root->keys[i]) {
+        i++;
+    }
+    
+    if (root->is_leaf) {
+        if (i > 0 && root->keys[i - 1] == key) {
+            *pos = i - 1;
+            return root;
+        }
+        return NULL;
+    }
+    
+    return searchBPlus(root->children[i], key, pos);
+}
+
+
+// Split child for B+ Tree
+void splitBPlusChild(BPlusTreeNode* parent, int index, BPlusTreeNode* child) {
+    BPlusTreeNode* newChild = createBPlusNode(child->is_leaf);
+    newChild->key_count = MIN_KEYS;
+    
+    // Copy keys
+    for (int i = 0; i < MIN_KEYS; i++) {
+        newChild->keys[i] = child->keys[i + MIN_KEYS + (child->is_leaf ? 0 : 1)];
+    }
+    
+    if (!child->is_leaf) {
+        // Copy children for internal node
+        for (int i = 0; i <= MIN_KEYS; i++) {
+            newChild->children[i] = child->children[i + MIN_KEYS + 1];
+        }
+    } else {
+        // For leaf nodes, maintain linked list
+        newChild->next = child->next;
+        child->next = newChild;
+    }
+    
+    // Update child key count
+    child->key_count = MIN_KEYS + (child->is_leaf ? 0 : -1);
+    
+    // Make space in parent
+    for (int i = parent->key_count; i > index; i--) {
+        parent->children[i + 1] = parent->children[i];
+        parent->keys[i] = parent->keys[i - 1];
+    }
+    
+    // Connect new child to parent
+    parent->children[index + 1] = newChild;
+    parent->keys[index] = child->keys[MIN_KEYS];
+    parent->key_count++;
+}
+
+
+// Insert into non-full B+ Tree node
+void insertBPlusNonFull(BPlusTreeNode* node, int key) {
+    int i = node->key_count - 1;
+    
+    if (node->is_leaf) {
+        // Insert into leaf
+        while (i >= 0 && key < node->keys[i]) {
+            node->keys[i + 1] = node->keys[i];
+            i--;
+        }
+        node->keys[i + 1] = key;
+        node->key_count++;
+    } else {
+        // Find child to insert into
+        while (i >= 0 && key < node->keys[i]) {
+            i--;
+        }
+        i++;
+        
+        // Check if child is full
+        if (node->children[i]->key_count == MAX_KEYS) {
+            splitBPlusChild(node, i, node->children[i]);
+            if (key > node->keys[i]) {
+                i++;
+            }
+        }
+        insertBPlusNonFull(node->children[i], key);
+    }
+}
+
+
+// Insert into B+ Tree
+BPlusTreeNode* insertBPlus(BPlusTreeNode* root, int key) {
+    if (root == NULL) {
+        root = createBPlusNode(true);
+        root->keys[0] = key;
+        root->key_count = 1;
+        return root;
+    }
+    
+    if (root->key_count == MAX_KEYS) {
+        BPlusTreeNode* newRoot = createBPlusNode(false);
+        newRoot->children[0] = root;
+        splitBPlusChild(newRoot, 0, root);
+        
+        int i = 0;
+        if (newRoot->keys[0] < key) {
+            i++;
+        }
+        insertBPlusNonFull(newRoot->children[i], key);
+        return newRoot;
+    } else {
+        insertBPlusNonFull(root, key);
+        return root;
+    }
+}
+
+
+// Range query in B+ Tree
+void rangeQuery(BPlusTreeNode* root, int start, int end) {
+    if (root == NULL) return;
+    
+    // Find the starting leaf
+    BPlusTreeNode* current = root;
+    while (!current->is_leaf) {
+        int i = 0;
+        while (i < current->key_count && start >= current->keys[i]) {
+            i++;
+        }
+        current = current->children[i];
+    }
+    
+    // Traverse through leaves
+    printf("Range query [%d, %d]: ", start, end);
+    while (current != NULL) {
+        for (int i = 0; i < current->key_count; i++) {
+            if (current->keys[i] >= start && current->keys[i] <= end) {
+                printf("%d ", current->keys[i]);
+            }
+            if (current->keys[i] > end) {
+                return;
+            }
+        }
+        current = current->next;
+    }
+    printf("\n");
+}
+
+
+// Print B+ Tree
+void printBPlusTree(BPlusTreeNode* root, int level) {
+    if (root != NULL) {
+        printf("Level %d (%s): ", level, root->is_leaf ? "leaf" : "internal");
+        for (int i = 0; i < root->key_count; i++) {
+            printf("%d ", root->keys[i]);
+        }
+        printf("\n");
+        
+        if (!root->is_leaf) {
+            for (int i = 0; i <= root->key_count; i++) {
+                printBPlusTree(root->children[i], level + 1);
+            }
+        }
+    }
+}
+
+
+// Print leaf nodes (linked list)
+void printLeaves(BPlusTreeNode* root) {
+    if (root == NULL) return;
+    
+    // Find first leaf
+    BPlusTreeNode* current = root;
+    while (!current->is_leaf) {
+        current = current->children[0];
+    }
+    
+    printf("Leaf nodes: ");
+    while (current != NULL) {
+        for (int i = 0; i < current->key_count; i++) {
+            printf("%d ", current->keys[i]);
+        }
+        printf("-> ");
+        current = current->next;
+    }
+    printf("NULL\n");
+}
+
+
+// Free B+ Tree memory
+void freeBPlusTree(BPlusTreeNode* root) {
+    if (root != NULL) {
+        if (!root->is_leaf) {
+            for (int i = 0; i <= root->key_count; i++) {
+                freeBPlusTree(root->children[i]);
+            }
+        }
+        free(root);
+    }
+}
+
+
+// B+ Tree Demo
+void bPlusTreeDemo() {
+    printf("\n=== B+ Tree Implementation ===\n\n");
+    
+    BPlusTreeNode* root = NULL;
+    int keys[] = {10, 20, 5, 6, 12, 30, 7, 17, 3, 25, 15, 8};
+    int n = sizeof(keys) / sizeof(keys[0]);
+    
+    printf("Inserting keys: ");
+    for (int i = 0; i < n; i++) {
+        printf("%d ", keys[i]);
+        root = insertBPlus(root, keys[i]);
+    }
+    printf("\n\n");
+    
+    printf("B+ Tree structure:\n");
+    printBPlusTree(root, 0);
+    printf("\n");
+    
+    printf("Leaf node sequence:\n");
+    printLeaves(root);
+    printf("\n");
+    
+    // Search demonstration
+    int searchKey = 12;
+    int pos;
+    BPlusTreeNode* result = searchBPlus(root, searchKey, &pos);
+    if (result != NULL) {
+        printf("Key %d found at position %d in leaf node\n", searchKey, pos);
+    } else {
+        printf("Key %d not found\n", searchKey);
+    }
+    
+    // Range query demonstration
+    printf("\n");
+    rangeQuery(root, 5, 15);
+    rangeQuery(root, 20, 30);
+    
+    freeBPlusTree(root);
+}
+
+
+// Main function
+int main() {
+    bTreeDemo();
+    bPlusTreeDemo();
+    
+    return 0;
+}
